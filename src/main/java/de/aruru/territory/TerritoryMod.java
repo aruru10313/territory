@@ -1,12 +1,14 @@
 package de.aruru.territory;
 
 import com.mojang.brigadier.arguments.StringArgumentType;
+import com.flowpowered.math.vector.Vector2d;
 import de.bluecolored.bluemap.api.BlueMapAPI;
 import de.bluecolored.bluemap.api.BlueMapMap;
 import de.bluecolored.bluemap.api.markers.ExtrudeMarker;
 import de.bluecolored.bluemap.api.markers.MarkerSet;
 import de.bluecolored.bluemap.api.math.Color;
 import de.bluecolored.bluemap.api.math.Shape;
+import java.util.HashSet;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.particles.DustParticleOptions;
 import net.minecraft.core.particles.ParticleTypes;
@@ -412,6 +414,119 @@ public final class TerritoryMod {
                 .add(new BoundarySegment(axis, start, end, fixed));
     }
 
+    private record GridPoint(long x, long z) {}
+
+    private static void addEdge(Map<GridPoint, List<GridPoint>> map, GridPoint from, GridPoint to) {
+        map.computeIfAbsent(from, k -> new ArrayList<>()).add(to);
+    }
+
+    private static List<Shape> createMergedShapes(List<ChunkPos> chunks) {
+        if (chunks == null || chunks.isEmpty()) return List.of();
+
+        Set<Long> chunkSet = new HashSet<>();
+        for (ChunkPos c : chunks) {
+            chunkSet.add(ChunkPos.asLong(c.x, c.z));
+        }
+
+        Map<GridPoint, List<GridPoint>> edgeMap = new HashMap<>();
+
+        for (ChunkPos c : chunks) {
+            long x0 = (long) c.x * 16;
+            long z0 = (long) c.z * 16;
+            long x1 = x0 + 16;
+            long z1 = z0 + 16;
+
+            // North: (x0, z0) -> (x1, z0)
+            if (!chunkSet.contains(ChunkPos.asLong(c.x, c.z - 1))) {
+                addEdge(edgeMap, new GridPoint(x0, z0), new GridPoint(x1, z0));
+            }
+            // East: (x1, z0) -> (x1, z1)
+            if (!chunkSet.contains(ChunkPos.asLong(c.x + 1, c.z))) {
+                addEdge(edgeMap, new GridPoint(x1, z0), new GridPoint(x1, z1));
+            }
+            // South: (x1, z1) -> (x0, z1)
+            if (!chunkSet.contains(ChunkPos.asLong(c.x, c.z + 1))) {
+                addEdge(edgeMap, new GridPoint(x1, z1), new GridPoint(x0, z1));
+            }
+            // West: (x0, z1) -> (x0, z0)
+            if (!chunkSet.contains(ChunkPos.asLong(c.x - 1, c.z))) {
+                addEdge(edgeMap, new GridPoint(x0, z1), new GridPoint(x0, z0));
+            }
+        }
+
+        List<Shape> shapes = new ArrayList<>();
+
+        while (!edgeMap.isEmpty()) {
+            GridPoint startPoint = edgeMap.keySet().iterator().next();
+            List<GridPoint> loop = new ArrayList<>();
+            GridPoint current = startPoint;
+
+            while (current != null) {
+                loop.add(current);
+                List<GridPoint> nextList = edgeMap.get(current);
+                if (nextList == null || nextList.isEmpty()) {
+                    edgeMap.remove(current);
+                    break;
+                }
+                GridPoint next = nextList.remove(nextList.size() - 1);
+                if (nextList.isEmpty()) {
+                    edgeMap.remove(current);
+                }
+                if (next.equals(startPoint)) {
+                    break;
+                }
+                current = next;
+            }
+
+            if (loop.size() >= 3) {
+                List<GridPoint> simplified = simplifyPolygon(loop);
+                if (simplified.size() >= 3) {
+                    List<Vector2d> vectorPoints = new ArrayList<>(simplified.size());
+                    for (GridPoint gp : simplified) {
+                        vectorPoints.add(new Vector2d(gp.x, gp.z));
+                    }
+                    try {
+                        shapes.add(new Shape(vectorPoints));
+                    } catch (Exception ignored) {}
+                }
+            }
+        }
+
+        if (shapes.isEmpty()) {
+            int minX = chunks.stream().mapToInt(p -> p.x).min().orElse(0);
+            int maxX = chunks.stream().mapToInt(p -> p.x).max().orElse(0);
+            int minZ = chunks.stream().mapToInt(p -> p.z).min().orElse(0);
+            int maxZ = chunks.stream().mapToInt(p -> p.z).max().orElse(0);
+            shapes.add(Shape.createRect(minX * 16.0, minZ * 16.0, (maxX + 1) * 16.0, (maxZ + 1) * 16.0));
+        }
+
+        return shapes;
+    }
+
+    private static List<GridPoint> simplifyPolygon(List<GridPoint> points) {
+        if (points.size() < 3) return points;
+        List<GridPoint> result = new ArrayList<>();
+        int n = points.size();
+        for (int i = 0; i < n; i++) {
+            GridPoint prev = points.get((i - 1 + n) % n);
+            GridPoint curr = points.get(i);
+            GridPoint next = points.get((i + 1) % n);
+
+            long dx1 = curr.x - prev.x;
+            long dz1 = curr.z - prev.z;
+            long dx2 = next.x - curr.x;
+            long dz2 = next.z - curr.z;
+
+            long cross = dx1 * dz2 - dz1 * dx2;
+            long dot = dx1 * dx2 + dz1 * dz2;
+            if (cross == 0 && dot > 0) {
+                continue;
+            }
+            result.add(curr);
+        }
+        return result;
+    }
+
     private static void refreshMarkers(BlueMapAPI api, MinecraftServer server) {
         if (api == null || server == null) return;
         TerritoryData data = TerritoryData.get(server);
@@ -421,60 +536,43 @@ public final class TerritoryMod {
             set.getMarkers().clear();
             String dimension = map.getWorld().getId();
 
-            data.claims.forEach((claimKey, claim) -> {
-                if (!worldMatches(dimension, claimKey)) return;
-                ChunkPos pos = parseChunk(claimKey);
-                double x0 = pos.x * 16.0;
-                double z0 = pos.z * 16.0;
-                double x1 = x0 + 16.0;
-                double z1 = z0 + 16.0;
+            Map<String, List<ChunkPos>> grouped = new HashMap<>();
+            Map<String, Claim> representatives = new HashMap<>();
+            data.claims.forEach((key, claim) -> {
+                if (!worldMatches(dimension, key)) return;
+                String group = key.substring(0, key.indexOf('|')) + "|" + claim.ownerUuid + "|" + claim.territoryName;
+                grouped.computeIfAbsent(group, ignored -> new ArrayList<>()).add(parseChunk(key));
+                representatives.putIfAbsent(group, claim);
+            });
+
+            grouped.forEach((group, chunks) -> {
+                Claim claim = representatives.get(group);
+                List<Shape> shapes = createMergedShapes(chunks);
 
                 int hash = claim.ownerUuid.hashCode();
                 float hue = (Math.abs(hash) % 360) / 360.0f;
                 java.awt.Color awtColor = java.awt.Color.getHSBColor(hue, 0.75f, 0.95f);
-                Color lineColor = new Color(awtColor.getRed(), awtColor.getGreen(), awtColor.getBlue(), 0.90f);
-                Color fillColor = new Color(awtColor.getRed(), awtColor.getGreen(), awtColor.getBlue(), 0.18f);
+                Color lineColor = new Color(awtColor.getRed(), awtColor.getGreen(), awtColor.getBlue(), 0.95f);
+                Color fillColor = new Color(awtColor.getRed(), awtColor.getGreen(), awtColor.getBlue(), 0.20f);
 
-                ExtrudeMarker marker = ExtrudeMarker.builder()
-                        .label(claim.territoryName)
-                        .detail("영토: <b>" + claim.territoryName + "</b><br>"
-                                + "소유자: " + claim.ownerName + "<br>"
-                                + "청크 좌표: [" + pos.x + ", " + pos.z + "]<br>"
-                                + "블럭 범위: (" + (pos.x * 16) + "~" + ((pos.x + 1) * 16 - 1) + ", "
-                                + (pos.z * 16) + "~" + ((pos.z + 1) * 16 - 1) + ")")
-                        .shape(Shape.createRect(x0, z0, x1, z1), -64, 320)
-                        .lineColor(lineColor)
-                        .fillColor(fillColor)
-                        .lineWidth(2)
-                        .depthTestEnabled(false)
-                        .listed(false)
-                        .build();
-                set.put("chunk_" + claimKey, marker);
+                for (int i = 0; i < shapes.size(); i++) {
+                    Shape shape = shapes.get(i);
+                    ExtrudeMarker marker = ExtrudeMarker.builder()
+                            .label(claim.territoryName)
+                            .detail("영토: <b>" + claim.territoryName + "</b><br>"
+                                    + "소유자: " + claim.ownerName + "<br>"
+                                    + "크기: " + chunks.size() + "청크")
+                            .shape(shape, 62.0f, 64.0f)
+                            .lineColor(lineColor)
+                            .fillColor(fillColor)
+                            .lineWidth(3)
+                            .depthTestEnabled(false)
+                            .listed(false)
+                            .build();
+                    set.put("territory_" + group + "_" + i, marker);
+                }
             });
         }
-    }
-
-    private static List<MergedArea> mergedAreas(Map<String, Claim> claims, String dimension) {
-        Map<String, List<ChunkPos>> grouped = new HashMap<>();
-        Map<String, Claim> representatives = new HashMap<>();
-        claims.forEach((key, claim) -> {
-            if (!worldMatches(dimension, key)) return;
-            String group = key.substring(0, key.indexOf('|')) + "|" + claim.ownerUuid + "|" + claim.territoryName;
-            grouped.computeIfAbsent(group, ignored -> new ArrayList<>()).add(parseChunk(key));
-            representatives.putIfAbsent(group, claim);
-        });
-
-        List<MergedArea> result = new ArrayList<>();
-        grouped.forEach((group, chunks) -> {
-            Claim claim = representatives.get(group);
-            int minX = chunks.stream().mapToInt(pos -> pos.x).min().orElse(0);
-            int maxX = chunks.stream().mapToInt(pos -> pos.x).max().orElse(0);
-            int minZ = chunks.stream().mapToInt(pos -> pos.z).min().orElse(0);
-            int maxZ = chunks.stream().mapToInt(pos -> pos.z).max().orElse(0);
-            result.add(new MergedArea(group, claim.ownerUuid, claim.ownerName, claim.territoryName,
-                    minX, maxX, minZ, maxZ, chunks.size()));
-        });
-        return result;
     }
 
     private static boolean worldMatches(String mapWorldId, String claimKey) {
