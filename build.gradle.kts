@@ -1,6 +1,6 @@
 plugins {
     id("java")
-    alias(libs.plugins.neoforge.gradle)
+    id("net.neoforged.moddev") version "2.0.107"
 }
 
 val minecraftVersion = "1.21.1"
@@ -18,11 +18,12 @@ neoForge {
 
 repositories {
     mavenCentral()
+    maven("https://repo.bluecolored.de/releases")
+    maven("https://maven.neoforged.net/releases")
 }
 
 dependencies {
-    implementation("net.neoforged:neoforge:$neoVersion")
-    compileOnly(files("$rootDir/api/build/libs/bluemap-api-2.7.7-dirty.jar"))
+    compileOnly("de.bluecolored:bluemap-api:2.7.7")
 
     jarJar("org.xerial:sqlite-jdbc:3.46.1.0")
     jarJar("com.mysql:mysql-connector-j:8.4.0")
