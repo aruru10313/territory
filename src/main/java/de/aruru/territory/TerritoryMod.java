@@ -420,21 +420,36 @@ public final class TerritoryMod {
                     id -> MarkerSet.builder().label("영토").toggleable(true).defaultHidden(false).sorting(-10).build());
             set.getMarkers().clear();
             String dimension = map.getWorld().getId();
-            mergedAreas(data.claims, dimension).forEach(area -> {
-                double x0 = area.minChunkX * 16.0, z0 = area.minChunkZ * 16.0;
+
+            data.claims.forEach((claimKey, claim) -> {
+                if (!worldMatches(dimension, claimKey)) return;
+                ChunkPos pos = parseChunk(claimKey);
+                double x0 = pos.x * 16.0;
+                double z0 = pos.z * 16.0;
+                double x1 = x0 + 16.0;
+                double z1 = z0 + 16.0;
+
+                int hash = claim.ownerUuid.hashCode();
+                float hue = (Math.abs(hash) % 360) / 360.0f;
+                java.awt.Color awtColor = java.awt.Color.getHSBColor(hue, 0.75f, 0.95f);
+                Color lineColor = new Color(awtColor.getRed(), awtColor.getGreen(), awtColor.getBlue(), 0.90f);
+                Color fillColor = new Color(awtColor.getRed(), awtColor.getGreen(), awtColor.getBlue(), 0.18f);
+
                 ExtrudeMarker marker = ExtrudeMarker.builder()
-                        .label(area.territoryName)
-                        .detail("영토: " + area.territoryName + "<br>소유자: " + area.ownerName
-                                + "<br>크기: " + area.chunkCount + "청크")
-                        .shape(Shape.createRect(x0, z0, (area.maxChunkX + 1) * 16.0,
-                                (area.maxChunkZ + 1) * 16.0), -64, 320)
-                        .lineColor(new Color(0x35A7FF, 0.95f))
-                        .fillColor(new Color(0x35A7FF, 0.22f))
-                        .lineWidth(3)
+                        .label(claim.territoryName)
+                        .detail("영토: <b>" + claim.territoryName + "</b><br>"
+                                + "소유자: " + claim.ownerName + "<br>"
+                                + "청크 좌표: [" + pos.x + ", " + pos.z + "]<br>"
+                                + "블럭 범위: (" + (pos.x * 16) + "~" + ((pos.x + 1) * 16 - 1) + ", "
+                                + (pos.z * 16) + "~" + ((pos.z + 1) * 16 - 1) + ")")
+                        .shape(Shape.createRect(x0, z0, x1, z1), -64, 320)
+                        .lineColor(lineColor)
+                        .fillColor(fillColor)
+                        .lineWidth(2)
                         .depthTestEnabled(false)
                         .listed(false)
                         .build();
-                set.put(area.id(), marker);
+                set.put("chunk_" + claimKey, marker);
             });
         }
     }
