@@ -24,10 +24,16 @@
 ### 3. 인게임 파티클 경계 표시
 - `/trm` 또는 `/trm show`를 통해 자신이 속한 영토의 경계선에 파티클을 켜고 끌 수 있습니다.
 
-### 4. 다양한 데이터베이스 저장소 지원
-- **SQLite** (기본값): 별도 DB 서버 없이 `config/territory/territory.db` 파일에 자동 저장됩니다.
-- **MySQL / MariaDB**: 대형 서버 환경 지원
-- **PostgreSQL**: 엔터프라이즈 환경 지원
+### 4. 클라우드 데이터베이스 및 비동기 동기화 지원
+- **비동기 백그라운드 동기화 (서버 최적화)**:
+  - 영토 구매/삭제 시 로컬 SQLite에 0.1ms 만에 즉시 기록하고, 원격 클라우드 DB 연동은 별도의 백그라운드 스레드에서 비동기 처리하여 **마인크래프트 서버 틱(TPS) 지연이 전혀 없습니다.**
+- **Supabase (클라우드 PostgreSQL)**:
+  - Supabase 연결 문자열(`jdbc:postgresql://db.<REF>.supabase.co:5432/postgres?sslmode=require`) 또는 Pooler(6543 포트) 지원
+  - SSL 자동 활성화(`sslmode=require`)
+- **MongoDB Atlas (클라우드 NoSQL)**:
+  - MongoDB Atlas Data API(REST)를 통한 클라우드 컬렉션 동기화 지원
+  - `endpoint`, `api-key`, `cluster`, `database`, `collection` 설정
+- **기본 로컬 SQLite & MySQL & PostgreSQL** 지원
 
 ---
 
