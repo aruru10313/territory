@@ -463,9 +463,11 @@ public final class TerritoryMod {
     private static boolean worldMatches(String mapWorldId, String claimKey) {
         int separator = claimKey.indexOf('|');
         if (separator < 0) return false;
-        String dimension = claimKey.substring(0, separator);
-        return mapWorldId.contains(dimension)
-                || mapWorldId.contains(dimension.replace("minecraft:", ""));
+        String dimension = claimKey.substring(0, separator).replace("minecraft:", "");
+        if ((mapWorldId.equals("world") || mapWorldId.contains("overworld")) && dimension.contains("overworld")) {
+            return true;
+        }
+        return mapWorldId.contains(dimension) || dimension.contains(mapWorldId);
     }
 
     private static String key(ServerLevel level, ChunkPos chunk) {
