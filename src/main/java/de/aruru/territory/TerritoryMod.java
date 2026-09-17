@@ -27,8 +27,10 @@ import net.neoforged.fml.common.Mod;
 import net.neoforged.neoforge.event.RegisterCommandsEvent;
 import net.neoforged.neoforge.event.server.ServerStartedEvent;
 import net.neoforged.neoforge.event.server.ServerStoppingEvent;
+import net.minecraft.commands.CommandSourceStack;
 import net.neoforged.neoforge.event.tick.ServerTickEvent;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -37,6 +39,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.UUID;
 
+import static com.mojang.brigadier.arguments.IntegerArgumentType.getInteger;
 import static com.mojang.brigadier.arguments.IntegerArgumentType.integer;
 import static net.minecraft.commands.Commands.argument;
 import static net.minecraft.commands.Commands.literal;
@@ -100,7 +103,27 @@ public final class TerritoryMod {
                                 ctx.getSource().getPlayerOrException())))
                 .then(literal("list")
                         .executes(ctx -> list(ctx.getSource().getServer(),
-                                ctx.getSource().getPlayerOrException()))));
+                                ctx.getSource())))
+                .then(literal("reload")
+                        .executes(ctx -> reload(ctx.getSource().getServer(), ctx.getSource())))
+                .then(literal("test")
+                        .executes(ctx -> testClaim(ctx.getSource().getServer(), "TestTerritory", ctx.getSource()))
+                        .then(argument("name", StringArgumentType.greedyString())
+                                .executes(ctx -> testClaim(ctx.getSource().getServer(),
+                                        StringArgumentType.getString(ctx, "name"), ctx.getSource()))))
+                .then(literal("admin")
+                        .then(literal("claim")
+                                .then(argument("owner", StringArgumentType.word())
+                                        .then(argument("name", StringArgumentType.word())
+                                                .then(argument("chunkX", integer())
+                                                        .then(argument("chunkZ", integer())
+                                                                .executes(ctx -> adminClaim(
+                                                                        ctx.getSource().getServer(),
+                                                                        StringArgumentType.getString(ctx, "owner"),
+                                                                        StringArgumentType.getString(ctx, "name"),
+                                                                        getInteger(ctx, "chunkX"),
+                                                                        getInteger(ctx, "chunkZ"),
+                                                                        ctx.getSource())))))))));
     }
 
     @SubscribeEvent
@@ -262,21 +285,68 @@ public final class TerritoryMod {
         return true;
     }
 
-    private static int list(MinecraftServer server, ServerPlayer player) {
-        if (!instance().config.isEnabled(player.serverLevel().dimension().location().toString())) {
-            player.sendSystemMessage(Component.literal("이 월드에서는 영토를 사용할 수 없습니다."));
-            return 0;
-        }
+    private static int list(MinecraftServer server, CommandSourceStack source) {
         TerritoryData data = TerritoryData.get(server);
         Map<String, Integer> counts = new HashMap<>();
         data.claims.values().forEach(claim -> counts.merge(claim.territoryName, 1, Integer::sum));
         if (counts.isEmpty()) {
-            player.sendSystemMessage(Component.literal("등록된 영토가 없습니다."));
+            source.sendSuccess(() -> Component.literal("등록된 영토가 없습니다."), false);
         } else {
             counts.forEach((name, count) ->
-                    player.sendSystemMessage(Component.literal(name + ": " + count + "청크")));
+                    source.sendSuccess(() -> Component.literal(name + ": " + count + "청크"), false));
         }
         return counts.size();
+    }
+
+    private static int reload(MinecraftServer server, CommandSourceStack source) {
+        if (instance().database != null) {
+            TerritoryData.get(server).loadDatabase(instance().database);
+        }
+        refreshMarkers(BlueMapAPI.getInstance().orElse(null), server);
+        source.sendSuccess(() -> Component.literal("[Territory] 영토 데이터를 다시 불러오고 BlueMap 마커를 갱신했습니다."), true);
+        return 1;
+    }
+
+    private static int testClaim(MinecraftServer server, String territoryName, CommandSourceStack source) {
+        ServerLevel level = server.overworld();
+        TerritoryData data = TerritoryData.get(server);
+        UUID adminUuid = UUID.nameUUIDFromBytes("Admin".getBytes(StandardCharsets.UTF_8));
+        String ownerName = "Admin";
+        String name = (territoryName == null || territoryName.trim().isEmpty()) ? "TestTerritory" : territoryName.trim();
+
+        int[][] testChunks = {{0, 0}, {0, 1}, {1, 0}, {1, 1}};
+        for (int[] c : testChunks) {
+            ChunkPos chunk = new ChunkPos(c[0], c[1]);
+            String key = key(level, chunk);
+            data.claims.put(key, new Claim(adminUuid, ownerName, name));
+        }
+
+        data.setDirty();
+        if (instance().database != null) {
+            data.writeDatabase(instance().database);
+        }
+        data.writeClaimsFile();
+        refreshMarkers(BlueMapAPI.getInstance().orElse(null), server);
+        source.sendSuccess(() -> Component.literal("[Territory] 테스트 영토 '" + name + "' (4청크: 0,0 ~ 1,1) 등록 완료! BlueMap 마커에 실시간 반영되었습니다."), true);
+        return 1;
+    }
+
+    private static int adminClaim(MinecraftServer server, String owner, String territoryName, int chunkX, int chunkZ, CommandSourceStack source) {
+        ServerLevel level = server.overworld();
+        TerritoryData data = TerritoryData.get(server);
+        UUID ownerUuid = UUID.nameUUIDFromBytes(owner.getBytes(StandardCharsets.UTF_8));
+        ChunkPos chunk = new ChunkPos(chunkX, chunkZ);
+        String key = key(level, chunk);
+
+        data.claims.put(key, new Claim(ownerUuid, owner, territoryName));
+        data.setDirty();
+        if (instance().database != null) {
+            data.writeDatabase(instance().database);
+        }
+        data.writeClaimsFile();
+        refreshMarkers(BlueMapAPI.getInstance().orElse(null), server);
+        source.sendSuccess(() -> Component.literal("[Territory] 청크 (" + chunkX + ", " + chunkZ + ")를 '" + owner + "'의 '" + territoryName + "' 영토로 등록했습니다."), true);
+        return 1;
     }
 
     private static void showBoundary(ServerPlayer player) {
