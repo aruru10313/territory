@@ -80,7 +80,6 @@ public final class TerritoryMod {
 
     private static void registerCommand(RegisterCommandsEvent event, String commandName) {
         event.getDispatcher().register(literal(commandName)
-                .requires(source -> source.hasPermission(4))
                 .executes(ctx -> toggleBoundary(ctx.getSource().getServer(),
                         ctx.getSource().getPlayerOrException()))
                 .then(literal("buy")
@@ -105,13 +104,16 @@ public final class TerritoryMod {
                         .executes(ctx -> list(ctx.getSource().getServer(),
                                 ctx.getSource())))
                 .then(literal("reload")
+                        .requires(source -> source.hasPermission(2))
                         .executes(ctx -> reload(ctx.getSource().getServer(), ctx.getSource())))
                 .then(literal("test")
+                        .requires(source -> source.hasPermission(2))
                         .executes(ctx -> testClaim(ctx.getSource().getServer(), "TestTerritory", ctx.getSource()))
                         .then(argument("name", StringArgumentType.greedyString())
                                 .executes(ctx -> testClaim(ctx.getSource().getServer(),
                                         StringArgumentType.getString(ctx, "name"), ctx.getSource()))))
                 .then(literal("admin")
+                        .requires(source -> source.hasPermission(2))
                         .then(literal("claim")
                                 .then(argument("owner", StringArgumentType.word())
                                         .then(argument("name", StringArgumentType.word())

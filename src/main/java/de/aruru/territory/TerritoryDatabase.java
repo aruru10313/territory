@@ -61,9 +61,22 @@ final class TerritoryDatabase implements AutoCloseable {
             Files.createDirectories(directory);
             Properties properties = loadProperties(directory.resolve("database.properties"));
             String type = properties.getProperty("type", "sqlite").trim().toLowerCase(Locale.ROOT);
+            Path localDbFile = directory.resolve(properties.getProperty("file", "territory.db"));
 
-            Connection local = DriverManager.getConnection("jdbc:sqlite:" +
-                    directory.resolve(properties.getProperty("file", "territory.db")));
+            Connection local;
+            try {
+                local = DriverManager.getConnection("jdbc:sqlite:" + localDbFile);
+                try (Statement s = local.createStatement()) {
+                    s.execute("PRAGMA quick_check;");
+                }
+            } catch (SQLException corruptEx) {
+                System.err.println("[Territory] SQLite database corrupted or locked! Quarantining: " + corruptEx.getMessage());
+                try {
+                    Path backup = directory.resolve("territory.db.corrupted." + System.currentTimeMillis());
+                    Files.move(localDbFile, backup);
+                } catch (Exception ignored) {}
+                local = DriverManager.getConnection("jdbc:sqlite:" + localDbFile);
+            }
 
             Connection remoteSql = "mongodb".equals(type) ? null : openRemoteSql(properties, type);
             TerritoryDatabase database = new TerritoryDatabase(local, remoteSql, properties, type);
@@ -400,7 +413,28 @@ final class TerritoryDatabase implements AutoCloseable {
     }
 
     private static String escapeJson(String s) {
-        return s.replace("\\", "\\\\").replace("\"", "\\\"");
+        if (s == null) return "";
+        StringBuilder sb = new StringBuilder(s.length() + 8);
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            switch (c) {
+                case '"' -> sb.append("\\\"");
+                case '\\' -> sb.append("\\\\");
+                case '\b' -> sb.append("\\b");
+                case '\f' -> sb.append("\\f");
+                case '\n' -> sb.append("\\n");
+                case '\r' -> sb.append("\\r");
+                case '\t' -> sb.append("\\t");
+                default -> {
+                    if (c < ' ') {
+                        sb.append(String.format("\\u%04x", (int) c));
+                    } else {
+                        sb.append(c);
+                    }
+                }
+            }
+        }
+        return sb.toString();
     }
 
     boolean isRemoteAvailable() {
